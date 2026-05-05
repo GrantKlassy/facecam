@@ -1,0 +1,184 @@
+use eframe::egui::Color32;
+
+/// A vertical color gradient profile.
+///
+/// `stops` are listed top → bottom: `stops[0]` is the color at the top of the
+/// bar growth area (where loud/high signals reach), `stops[N-1]` is the color
+/// at the very bottom (the silent baseline). Up to 32 stops are supported so
+/// each profile can encode a detailed gradient.
+pub struct Palette {
+    pub name: &'static str,
+    pub stops: &'static [(u8, u8, u8)],
+    pub bg: (u8, u8, u8),
+}
+
+pub const PALETTES: &[Palette] = &[
+    Palette {
+        name: "love",
+        stops: &[
+            (0xff, 0xff, 0xff),
+            (0xff, 0xcc, 0xdd),
+            (0xff, 0x77, 0xaa),
+            (0xff, 0x33, 0x88),
+        ],
+        bg: (0x10, 0x02, 0x08),
+    },
+    Palette {
+        name: "pulse",
+        stops: &[
+            (0xff, 0x00, 0x00),
+            (0x00, 0xff, 0x00),
+        ],
+        bg: (0x02, 0x06, 0x02),
+    },
+    Palette {
+        name: "fire",
+        stops: &[
+            (0xff, 0xff, 0xff),
+            (0xff, 0xee, 0x66),
+            (0xff, 0x66, 0x00),
+            (0xaa, 0x11, 0x00),
+            (0x18, 0x00, 0x00),
+        ],
+        bg: (0x08, 0x00, 0x00),
+    },
+    Palette {
+        name: "vapor",
+        stops: &[
+            (0x66, 0xff, 0xee),
+            (0xff, 0xee, 0x00),
+            (0xff, 0x00, 0xaa),
+            (0x00, 0x33, 0x66),
+        ],
+        bg: (0x06, 0x05, 0x10),
+    },
+    Palette {
+        name: "neon",
+        stops: &[
+            (0x00, 0xff, 0x66),
+            (0xff, 0xff, 0x00),
+            (0x00, 0xff, 0xff),
+            (0xff, 0x00, 0xff),
+        ],
+        bg: (0x05, 0x00, 0x08),
+    },
+    Palette {
+        name: "forest",
+        stops: &[
+            (0xff, 0xee, 0xaa),
+            (0xcc, 0xff, 0x66),
+            (0x00, 0x88, 0x44),
+            (0x00, 0x22, 0x11),
+        ],
+        bg: (0x02, 0x06, 0x04),
+    },
+    Palette {
+        name: "ocean",
+        stops: &[
+            (0xee, 0xff, 0xff),
+            (0x00, 0xaa, 0xcc),
+            (0x00, 0x44, 0x88),
+            (0x00, 0x00, 0x33),
+        ],
+        bg: (0x00, 0x00, 0x10),
+    },
+    Palette {
+        name: "sunset",
+        stops: &[
+            (0xff, 0xee, 0xaa),
+            (0xff, 0x77, 0x00),
+            (0xaa, 0x00, 0x66),
+            (0x22, 0x00, 0x44),
+        ],
+        bg: (0x08, 0x00, 0x10),
+    },
+    Palette {
+        name: "ice",
+        stops: &[
+            (0xff, 0xff, 0xff),
+            (0x44, 0x99, 0xff),
+            (0x00, 0x00, 0x22),
+        ],
+        bg: (0x02, 0x04, 0x10),
+    },
+    Palette {
+        name: "blood",
+        stops: &[
+            (0xff, 0xaa, 0x88),
+            (0xff, 0x22, 0x22),
+            (0x10, 0x00, 0x00),
+        ],
+        bg: (0x06, 0x00, 0x00),
+    },
+    Palette {
+        name: "matrix",
+        stops: &[
+            (0x88, 0xff, 0x88),
+            (0x00, 0xaa, 0x33),
+            (0x00, 0x10, 0x00),
+        ],
+        bg: (0x00, 0x06, 0x02),
+    },
+];
+
+/// Song-locked palette. Not part of `PALETTES` so it never appears in the
+/// spacebar cycle or the track-change auto-cycle — only `song_palette_override`
+/// can select it.
+pub const BUMBLEBEE: Palette = Palette {
+    name: "bumblebee",
+    stops: &[
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0xff, 0xea, 0x00),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+        (0x05, 0x05, 0x05),
+    ],
+    bg: (0x12, 0x0c, 0x00),
+};
+
+impl Palette {
+    pub fn sample(&self, t: f32) -> Color32 {
+        let t = t.clamp(0.0, 1.0);
+        if self.stops.len() == 1 {
+            let (r, g, b) = self.stops[0];
+            return Color32::from_rgb(r, g, b);
+        }
+        let scaled = t * (self.stops.len() - 1) as f32;
+        let lower = (scaled.floor() as usize).min(self.stops.len() - 1);
+        let upper = (lower + 1).min(self.stops.len() - 1);
+        let frac = scaled - lower as f32;
+        let (r1, g1, b1) = self.stops[lower];
+        let (r2, g2, b2) = self.stops[upper];
+        let lerp = |a: u8, b: u8| ((1.0 - frac) * a as f32 + frac * b as f32).round() as u8;
+        Color32::from_rgb(lerp(r1, r2), lerp(g1, g2), lerp(b1, b2))
+    }
+
+    pub fn bg_color(&self) -> Color32 {
+        Color32::from_rgb(self.bg.0, self.bg.1, self.bg.2)
+    }
+}

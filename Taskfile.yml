@@ -1,0 +1,24 @@
+version: "3"
+
+tasks:
+  default:
+    cmds:
+      - task: run:detached
+
+  build:release:
+    desc: Build the release binary
+    cmds:
+      - cargo build --release
+
+  run:
+    desc: Run facecam in the foreground (stdout/stderr attached)
+    deps: [build:release]
+    cmds:
+      - ./target/release/facecam
+
+  run:detached:
+    desc: Launch facecam fully detached --- no controlling terminal, survives shell exit. Logs to /tmp/facecam.log.
+    deps: [build:release]
+    cmds:
+      - setsid -f ./target/release/facecam </dev/null >/tmp/facecam.log 2>&1
+      - echo "facecam launched detached --- logs at /tmp/facecam.log"

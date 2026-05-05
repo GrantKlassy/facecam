@@ -1,3 +1,3 @@
 # facecam
 
-![facecam demo](README.gif)
+![facecam demo](README.webp)

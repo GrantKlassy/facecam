@@ -9,9 +9,9 @@ mod fft;
 mod nowplaying;
 
 fn main() -> Result<()> {
-    let capture = audio::start(app::SAMPLE_RATE, 32_768)
+    let device_pref = std::env::var("FACECAM_DEVICE").ok();
+    let capture = audio::start(app::SAMPLE_RATE, 32_768, device_pref.as_deref())
         .context("failed to start audio capture")?;
-    eprintln!("facecam: capturing from `{}`", capture.source_name);
 
     let nowplaying = nowplaying::start();
 
@@ -28,7 +28,11 @@ fn main() -> Result<()> {
         opts,
         Box::new(move |cc| {
             install_cjk_fallback(&cc.egui_ctx);
-            Ok(Box::new(app::FacecamApp::new(capture.consumer, nowplaying)))
+            Ok(Box::new(app::FacecamApp::new(
+                capture.consumer,
+                capture.control,
+                nowplaying,
+            )))
         }),
     )
     .map_err(|e| anyhow::anyhow!("eframe error: {e}"))?;

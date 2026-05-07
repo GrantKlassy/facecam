@@ -3,7 +3,7 @@ use eframe::epaint::Vertex;
 use ringbuf::traits::Consumer;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use crate::audio::AudioConsumer;
+use crate::audio::{AudioConsumer, AudioControl};
 use crate::colors::{Palette, BUMBLEBEE, PALETTES};
 use crate::fft::Analyzer;
 use crate::nowplaying::{SharedTrack, Track};
@@ -43,6 +43,7 @@ enum BarSide {
 
 pub struct FacecamApp {
     consumer: AudioConsumer,
+    audio_control: AudioControl,
     analyzer: Analyzer,
     nowplaying: SharedTrack,
     last_track: Option<Track>,
@@ -58,7 +59,11 @@ pub struct FacecamApp {
 }
 
 impl FacecamApp {
-    pub fn new(consumer: AudioConsumer, nowplaying: SharedTrack) -> Self {
+    pub fn new(
+        consumer: AudioConsumer,
+        audio_control: AudioControl,
+        nowplaying: SharedTrack,
+    ) -> Self {
         let screenshot_path = std::env::var_os("FACECAM_SCREENSHOT").map(std::path::PathBuf::from);
         let mode_idx = std::env::var("FACECAM_MODE")
             .ok()
@@ -66,6 +71,7 @@ impl FacecamApp {
             .unwrap_or(0);
         Self {
             consumer,
+            audio_control,
             analyzer: Analyzer::new(FFT_SIZE, SAMPLE_RATE, NUM_BARS, LOW_HZ, HIGH_HZ),
             nowplaying,
             last_track: None,
@@ -87,6 +93,8 @@ impl FacecamApp {
     fn handle_input(&mut self, ctx: &egui::Context) {
         let mut cycle = false;
         let mut cycle_mode = false;
+        let mut device_next = false;
+        let mut device_prev = false;
         let mut toggle_overlay = false;
         let mut toggle_controls = false;
         let mut shoot = false;
@@ -97,6 +105,13 @@ impl FacecamApp {
             }
             if i.key_pressed(egui::Key::M) {
                 cycle_mode = true;
+            }
+            if i.key_pressed(egui::Key::D) {
+                if i.modifiers.shift {
+                    device_prev = true;
+                } else {
+                    device_next = true;
+                }
             }
             if i.key_pressed(egui::Key::H) {
                 toggle_overlay = true;
@@ -116,6 +131,12 @@ impl FacecamApp {
         }
         if cycle_mode {
             self.mode_idx = (self.mode_idx + 1) % MODES.len();
+        }
+        if device_next {
+            self.audio_control.next();
+        }
+        if device_prev {
+            self.audio_control.prev();
         }
         if toggle_overlay {
             self.show_overlay = !self.show_overlay;
@@ -261,6 +282,8 @@ impl eframe::App for FacecamApp {
             } else {
                 format!("[{} | {}]", mode.name(), palette.name)
             };
+            let device = self.audio_control.current();
+            let device_label = format!("{}: {}", device.kind.label(), device.description);
             let font = egui::FontId::monospace(11.0);
             let pad = 3.0;
 
@@ -274,7 +297,7 @@ impl eframe::App for FacecamApp {
             painter.rect_filled(track_bg, 0.0, Color32::BLACK);
             painter.galley(track_pos, track_galley, Color32::WHITE);
 
-            let palette_galley = painter.layout_no_wrap(palette_label, font, Color32::WHITE);
+            let palette_galley = painter.layout_no_wrap(palette_label, font.clone(), Color32::WHITE);
             let palette_pos = Pos2::new(
                 rect.right() - 6.0 - palette_galley.size().x,
                 rect.bottom() - 4.0 - palette_galley.size().y,
@@ -285,6 +308,15 @@ impl eframe::App for FacecamApp {
             );
             painter.rect_filled(palette_bg, 0.0, Color32::BLACK);
             painter.galley(palette_pos, palette_galley, Color32::WHITE);
+
+            let device_galley = painter.layout_no_wrap(device_label, font, Color32::WHITE);
+            let device_pos = Pos2::new(rect.left() + 6.0, rect.top() + 6.0);
+            let device_bg = Rect::from_min_size(
+                Pos2::new(device_pos.x - pad, device_pos.y - pad),
+                device_galley.size() + egui::vec2(pad * 2.0, pad * 2.0),
+            );
+            painter.rect_filled(device_bg, 0.0, Color32::BLACK);
+            painter.galley(device_pos, device_galley, Color32::WHITE);
         }
 
         if self.show_controls {
@@ -456,6 +488,7 @@ fn draw_controls_panel(painter: &egui::Painter, rect: Rect) {
     const ENTRIES: &[(&str, &str)] = &[
         ("Space", "cycle palette"),
         ("M", "cycle mode"),
+        ("D / Shift+D", "next / prev audio device"),
         ("H", "toggle track overlay"),
         ("Tab", "toggle controls"),
         ("S", "screenshot"),

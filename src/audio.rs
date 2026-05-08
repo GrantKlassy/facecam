@@ -8,30 +8,14 @@ use std::time::Duration;
 
 pub type AudioConsumer = ringbuf::HeapCons<f32>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DeviceKind {
-    /// A physical (or virtual) recording source — microphone, line-in, etc.
-    Input,
-    /// A `.monitor` of an output sink — what the speakers/headphones are playing.
-    OutputMonitor,
-}
-
-impl DeviceKind {
-    pub fn label(&self) -> &'static str {
-        match self {
-            DeviceKind::Input => "in",
-            DeviceKind::OutputMonitor => "out",
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AudioDevice {
-    /// PulseAudio internal name (passed to `parec --device=`).
+    /// PulseAudio internal name (passed to `parec --device=`). Always a `.monitor`
+    /// of an output sink — facecam never captures from microphones or other
+    /// input sources, so the visualization tracks playback rather than the mic.
     pub name: String,
     /// Human-readable name shown in UI.
     pub description: String,
-    pub kind: DeviceKind,
 }
 
 pub struct AudioCapture {
@@ -89,7 +73,7 @@ pub fn start(
 ) -> Result<AudioCapture> {
     let devices = list_devices()?;
     if devices.is_empty() {
-        bail!("no audio sources found via pactl");
+        bail!("no audio output monitors found via pactl");
     }
     let initial_idx = pick_initial(&devices, device_pref);
 
@@ -125,11 +109,7 @@ fn capture_worker(
             let s = state.lock().unwrap();
             devices[s.selected_idx].clone()
         };
-        eprintln!(
-            "facecam: capturing from `{}` ({})",
-            device.description,
-            device.kind.label()
-        );
+        eprintln!("facecam: capturing from `{}`", device.description);
 
         let child = Command::new("parec")
             .args([
@@ -212,9 +192,9 @@ pub fn list_devices() -> Result<Vec<AudioDevice>> {
 
 /// Parse `pactl list sources` output into a sorted device list.
 ///
-/// Sort order: inputs first, then monitors. Within each group, alphabetical
-/// by description. This is the order users will cycle through with the `D`
-/// keybinding, so making it predictable matters.
+/// Input sources (microphones, line-in, etc.) are filtered out: facecam only
+/// visualizes audio playback, so we capture exclusively from `.monitor` sources
+/// of output sinks. Sorted alphabetically by description for stable cycling.
 pub fn parse_sources(text: &str) -> Vec<AudioDevice> {
     let mut devices = Vec::new();
     let mut current: Option<PartialDevice> = None;
@@ -240,16 +220,7 @@ pub fn parse_sources(text: &str) -> Vec<AudioDevice> {
         devices.push(d);
     }
 
-    devices.sort_by(|a, b| {
-        // Inputs (0) come before monitors (1).
-        let rank = |k: DeviceKind| match k {
-            DeviceKind::Input => 0,
-            DeviceKind::OutputMonitor => 1,
-        };
-        rank(a.kind)
-            .cmp(&rank(b.kind))
-            .then_with(|| a.description.to_lowercase().cmp(&b.description.to_lowercase()))
-    });
+    devices.sort_by(|a, b| a.description.to_lowercase().cmp(&b.description.to_lowercase()));
     devices
 }
 
@@ -264,28 +235,23 @@ impl PartialDevice {
     fn finish(self) -> Option<AudioDevice> {
         let name = self.name?;
         let description = self.description?;
-        // Prefer device.class when present; fall back to .monitor name suffix.
-        let kind = match self.device_class.as_deref() {
-            Some("monitor") => DeviceKind::OutputMonitor,
-            Some(_) => DeviceKind::Input,
-            None => {
-                if name.ends_with(".monitor") {
-                    DeviceKind::OutputMonitor
-                } else {
-                    DeviceKind::Input
-                }
-            }
+        // Keep only `.monitor` sources. Prefer device.class when present;
+        // fall back to the conventional `.monitor` name suffix when absent.
+        let is_monitor = match self.device_class.as_deref() {
+            Some("monitor") => true,
+            Some(_) => false,
+            None => name.ends_with(".monitor"),
         };
-        Some(AudioDevice {
-            name,
-            description,
-            kind,
-        })
+        if !is_monitor {
+            return None;
+        }
+        Some(AudioDevice { name, description })
     }
 }
 
 /// Pick the initial device index. Substring match against name OR description
-/// (case-insensitive). Falls back to the first input, then to index 0.
+/// (case-insensitive). Falls back to the first device — which is always a
+/// monitor since `parse_sources` filters out inputs.
 pub fn pick_initial(devices: &[AudioDevice], pref: Option<&str>) -> usize {
     if let Some(needle) = pref {
         let lower = needle.to_lowercase();
@@ -298,16 +264,17 @@ pub fn pick_initial(devices: &[AudioDevice], pref: Option<&str>) -> usize {
             }
         }
     }
-    devices
-        .iter()
-        .position(|d| d.kind == DeviceKind::Input)
-        .unwrap_or(0)
+    0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Realistic `pactl list sources` excerpt with a deliberate mix of inputs
+    /// (HyperX mic, built-in analog) and `.monitor` sources of output sinks.
+    /// Tests rely on this so the input/output filter is exercised by realistic
+    /// pulseaudio output rather than synthetic edge cases alone.
     const SAMPLE_PACTL: &str = r#"Source #57
 	State: SUSPENDED
 	Name: raop_sink.Sonos-38420B8EDBB8.local.10.0.0.104.7000.monitor
@@ -338,25 +305,59 @@ Source #75
 		device.class = "sound"
 "#;
 
+    /// Test-only check that a parsed device is a monitor of an output sink.
+    /// PulseAudio names every output monitor `<sink>.monitor`, so this suffix
+    /// is a reliable post-filter assertion regardless of how `device.class`
+    /// was reported.
+    fn is_output_monitor(d: &AudioDevice) -> bool {
+        d.name.ends_with(".monitor")
+    }
+
     #[test]
-    fn parses_real_pactl_output() {
+    fn parses_real_pactl_output_excludes_inputs() {
         let devices = parse_sources(SAMPLE_PACTL);
-        assert_eq!(devices.len(), 4);
-
-        // Inputs first (sorted alphabetically by description).
-        assert_eq!(devices[0].description, "Built-in Audio Analog Stereo");
-        assert_eq!(devices[0].kind, DeviceKind::Input);
-        assert_eq!(devices[1].description, "HyperX SoloCast Analog Stereo");
-        assert_eq!(devices[1].kind, DeviceKind::Input);
+        // Sample has 2 inputs and 2 monitors; only the monitors should remain.
+        assert_eq!(devices.len(), 2);
+        for d in &devices {
+            assert!(
+                is_output_monitor(d),
+                "input source leaked into device list: {} ({})",
+                d.name,
+                d.description
+            );
+        }
         assert_eq!(
-            devices[1].name,
-            "alsa_input.usb-Kingston_HyperX_SoloCast-00.analog-stereo"
+            devices[0].description,
+            "Monitor of Built-in Audio Digital Stereo (IEC958)"
         );
+        assert_eq!(devices[1].description, "Monitor of Record Player");
+    }
 
-        // Then monitors.
-        assert_eq!(devices[2].kind, DeviceKind::OutputMonitor);
-        assert_eq!(devices[3].kind, DeviceKind::OutputMonitor);
-        assert!(devices[2].description.starts_with("Monitor of"));
+    #[test]
+    fn parse_sources_drops_input_with_class_sound() {
+        let text = "Source #1\n\tName: alsa_input.usb-Mic\n\tDescription: My Mic\n\tProperties:\n\t\tdevice.class = \"sound\"\n";
+        assert!(
+            parse_sources(text).is_empty(),
+            "input device with device.class=\"sound\" must be excluded on linux"
+        );
+    }
+
+    #[test]
+    fn parse_sources_drops_input_when_class_missing() {
+        // No device.class — the parser falls back to checking the name suffix;
+        // a non-`.monitor` name must be treated as input and dropped.
+        let text = "Source #1\n\tName: alsa_input.usb-Mic\n\tDescription: My Mic\n";
+        assert!(
+            parse_sources(text).is_empty(),
+            "input device without device.class must be excluded on linux"
+        );
+    }
+
+    #[test]
+    fn parse_sources_drops_unknown_class_values() {
+        // Anything other than "monitor" is treated as a non-monitor source.
+        let text = "Source #1\n\tName: weird.thing\n\tDescription: Weird\n\tProperties:\n\t\tdevice.class = \"abstract\"\n";
+        assert!(parse_sources(text).is_empty());
     }
 
     #[test]
@@ -364,15 +365,27 @@ Source #75
         let text = "Source #1\n\tName: foo.monitor\n\tDescription: Monitor of Foo\n";
         let devices = parse_sources(text);
         assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].kind, DeviceKind::OutputMonitor);
+        assert!(is_output_monitor(&devices[0]));
+    }
+
+    #[test]
+    fn classifies_monitor_via_class_even_without_dot_monitor_name() {
+        // Pathological but valid: device.class explicitly says monitor, so we
+        // trust it even though the name doesn't follow convention. The test
+        // helper deliberately won't recognize this — we assert presence and
+        // length here instead.
+        let text = "Source #1\n\tName: oddly_named\n\tDescription: Funky\n\tProperties:\n\t\tdevice.class = \"monitor\"\n";
+        let devices = parse_sources(text);
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].name, "oddly_named");
     }
 
     #[test]
     fn skips_blocks_missing_required_fields() {
-        let text = "Source #1\n\tDescription: Has no name\nSource #2\n\tName: ok\n\tDescription: ok\n";
+        let text = "Source #1\n\tDescription: Has no name\nSource #2\n\tName: ok.monitor\n\tDescription: ok\n";
         let devices = parse_sources(text);
         assert_eq!(devices.len(), 1);
-        assert_eq!(devices[0].name, "ok");
+        assert_eq!(devices[0].name, "ok.monitor");
     }
 
     #[test]
@@ -382,53 +395,65 @@ Source #75
     }
 
     #[test]
-    fn pick_initial_matches_by_description_substring() {
+    fn pick_initial_never_returns_input_device() {
+        // Sanity: after parse_sources filters inputs, pick_initial cannot
+        // possibly hand back an input — none are present in the slice.
+        let devices = parse_sources(SAMPLE_PACTL);
+        assert!(!devices.is_empty());
+        let i = pick_initial(&devices, None);
+        assert!(is_output_monitor(&devices[i]));
+    }
+
+    #[test]
+    fn pick_initial_with_input_substring_pref_still_returns_monitor() {
+        // Even if FACECAM_DEVICE matches an input device's substring ("HyperX"),
+        // there are no inputs in the device list — so we fall back to the first
+        // monitor instead of accidentally selecting the mic.
         let devices = parse_sources(SAMPLE_PACTL);
         let i = pick_initial(&devices, Some("HyperX"));
-        assert_eq!(devices[i].description, "HyperX SoloCast Analog Stereo");
+        assert!(
+            is_output_monitor(&devices[i]),
+            "FACECAM_DEVICE matching an input substring must not select an input"
+        );
+    }
+
+    #[test]
+    fn pick_initial_matches_monitor_by_description_substring() {
+        let devices = parse_sources(SAMPLE_PACTL);
+        let i = pick_initial(&devices, Some("Record Player"));
+        assert_eq!(devices[i].description, "Monitor of Record Player");
+        assert!(is_output_monitor(&devices[i]));
     }
 
     #[test]
     fn pick_initial_is_case_insensitive() {
         let devices = parse_sources(SAMPLE_PACTL);
-        let i = pick_initial(&devices, Some("hyperx"));
-        assert_eq!(devices[i].description, "HyperX SoloCast Analog Stereo");
+        let i = pick_initial(&devices, Some("record player"));
+        assert_eq!(devices[i].description, "Monitor of Record Player");
     }
 
     #[test]
     fn pick_initial_matches_by_name_substring() {
         let devices = parse_sources(SAMPLE_PACTL);
-        let i = pick_initial(&devices, Some("Kingston"));
-        assert_eq!(devices[i].description, "HyperX SoloCast Analog Stereo");
+        let i = pick_initial(&devices, Some("raop_sink"));
+        assert_eq!(devices[i].description, "Monitor of Record Player");
+        assert!(is_output_monitor(&devices[i]));
     }
 
     #[test]
-    fn pick_initial_falls_back_to_first_input_when_no_match() {
-        let devices = parse_sources(SAMPLE_PACTL);
-        let i = pick_initial(&devices, Some("nonexistent device"));
-        assert_eq!(devices[i].kind, DeviceKind::Input);
-        assert_eq!(devices[i].description, "Built-in Audio Analog Stereo");
-    }
-
-    #[test]
-    fn pick_initial_with_no_pref_picks_first_input() {
+    fn pick_initial_with_no_pref_picks_first_monitor() {
         let devices = parse_sources(SAMPLE_PACTL);
         let i = pick_initial(&devices, None);
-        assert_eq!(devices[i].kind, DeviceKind::Input);
+        assert_eq!(i, 0);
+        assert!(is_output_monitor(&devices[i]));
     }
 
     #[test]
-    fn pick_initial_with_empty_pref_picks_first_input() {
+    fn pick_initial_with_empty_pref_picks_first_monitor() {
         let devices = parse_sources(SAMPLE_PACTL);
         let i = pick_initial(&devices, Some(""));
-        assert_eq!(devices[i].kind, DeviceKind::Input);
-    }
-
-    #[test]
-    fn pick_initial_with_only_monitors_picks_zero() {
-        let text = "Source #1\n\tName: foo.monitor\n\tDescription: Foo\n";
-        let devices = parse_sources(text);
-        assert_eq!(pick_initial(&devices, None), 0);
+        assert_eq!(i, 0);
+        assert!(is_output_monitor(&devices[i]));
     }
 
     fn make_control(devices: Vec<AudioDevice>, initial: usize) -> AudioControl {
@@ -441,22 +466,17 @@ Source #75
         }
     }
 
-    fn dev(name: &str, kind: DeviceKind) -> AudioDevice {
+    fn dev(name: &str) -> AudioDevice {
         AudioDevice {
             name: name.to_string(),
             description: name.to_string(),
-            kind,
         }
     }
 
     #[test]
     fn control_next_wraps_around() {
         let ctrl = make_control(
-            vec![
-                dev("a", DeviceKind::Input),
-                dev("b", DeviceKind::Input),
-                dev("c", DeviceKind::OutputMonitor),
-            ],
+            vec![dev("a.monitor"), dev("b.monitor"), dev("c.monitor")],
             0,
         );
         assert_eq!(ctrl.selected_idx(), 0);
@@ -476,10 +496,7 @@ Source #75
 
     #[test]
     fn control_prev_wraps_around() {
-        let ctrl = make_control(
-            vec![dev("a", DeviceKind::Input), dev("b", DeviceKind::Input)],
-            0,
-        );
+        let ctrl = make_control(vec![dev("a.monitor"), dev("b.monitor")], 0);
         ctrl.prev();
         assert_eq!(ctrl.state.lock().unwrap().pending_idx, Some(1));
     }
@@ -488,10 +505,7 @@ Source #75
     fn control_next_sets_pending_not_selected() {
         // selected_idx must not change until the worker consumes the pending request,
         // so the overlay keeps showing the *active* device while parec restarts.
-        let ctrl = make_control(
-            vec![dev("a", DeviceKind::Input), dev("b", DeviceKind::Input)],
-            0,
-        );
+        let ctrl = make_control(vec![dev("a.monitor"), dev("b.monitor")], 0);
         ctrl.next();
         assert_eq!(ctrl.selected_idx(), 0);
         assert_eq!(ctrl.state.lock().unwrap().pending_idx, Some(1));
@@ -503,10 +517,10 @@ Source #75
         // should advance two steps, not stay on +1.
         let ctrl = make_control(
             vec![
-                dev("a", DeviceKind::Input),
-                dev("b", DeviceKind::Input),
-                dev("c", DeviceKind::Input),
-                dev("d", DeviceKind::Input),
+                dev("a.monitor"),
+                dev("b.monitor"),
+                dev("c.monitor"),
+                dev("d.monitor"),
             ],
             0,
         );

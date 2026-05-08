@@ -282,8 +282,7 @@ impl eframe::App for FacecamApp {
             } else {
                 format!("[{} | {}]", mode.name(), palette.name)
             };
-            let device = self.audio_control.current();
-            let device_label = format!("{}: {}", device.kind.label(), device.description);
+            let device_label = self.audio_control.current().description;
             let font = egui::FontId::monospace(11.0);
             let pad = 3.0;
 

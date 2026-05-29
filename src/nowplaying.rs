@@ -1,6 +1,4 @@
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Track {
@@ -21,7 +19,12 @@ impl Track {
 
 pub type SharedTrack = Arc<Mutex<Option<Track>>>;
 
+/// Spawn the MPRIS polling thread (Linux only) and return shared track state.
+#[cfg(target_os = "linux")]
 pub fn start() -> SharedTrack {
+    use std::thread;
+    use std::time::Duration;
+
     let state: SharedTrack = Arc::new(Mutex::new(None));
     let writer = state.clone();
     thread::spawn(move || loop {
@@ -37,6 +40,14 @@ pub fn start() -> SharedTrack {
     state
 }
 
+/// No MPRIS outside Linux — now-playing stays empty and the overlay shows
+/// "(no track)". Audio still drives the visualization regardless.
+#[cfg(not(target_os = "linux"))]
+pub fn start() -> SharedTrack {
+    Arc::new(Mutex::new(None))
+}
+
+#[cfg(target_os = "linux")]
 fn poll_once() -> Option<Track> {
     let finder = mpris::PlayerFinder::new().ok()?;
     let player = finder.find_active().ok()?;

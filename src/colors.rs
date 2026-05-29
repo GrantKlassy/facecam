@@ -177,8 +177,4 @@ impl Palette {
         let lerp = |a: u8, b: u8| ((1.0 - frac) * a as f32 + frac * b as f32).round() as u8;
         Color32::from_rgb(lerp(r1, r2), lerp(g1, g2), lerp(b1, b2))
     }
-
-    pub fn bg_color(&self) -> Color32 {
-        Color32::from_rgb(self.bg.0, self.bg.1, self.bg.2)
-    }
 }

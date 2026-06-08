@@ -1,6 +1,4 @@
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct Track {
@@ -21,30 +19,10 @@ impl Track {
 
 pub type SharedTrack = Arc<Mutex<Option<Track>>>;
 
+/// Now-playing is sourced from MPRIS (a Linux/D-Bus standard) which has no macOS
+/// equivalent without private Apple frameworks, so this is a no-op stub: the track
+/// stays `None` and the overlay shows "(no track)". The auto palette-on-track-change
+/// feature simply never fires; palettes can still be cycled manually.
 pub fn start() -> SharedTrack {
-    let state: SharedTrack = Arc::new(Mutex::new(None));
-    let writer = state.clone();
-    thread::spawn(move || loop {
-        let next = poll_once();
-        if let Some(t) = next {
-            let mut guard = writer.lock().unwrap();
-            if guard.as_ref() != Some(&t) {
-                *guard = Some(t);
-            }
-        }
-        thread::sleep(Duration::from_millis(800));
-    });
-    state
-}
-
-fn poll_once() -> Option<Track> {
-    let finder = mpris::PlayerFinder::new().ok()?;
-    let player = finder.find_active().ok()?;
-    let meta = player.get_metadata().ok()?;
-    let title = meta.title().unwrap_or("").to_string();
-    let artist = meta
-        .artists()
-        .and_then(|a| a.first().map(|s| s.to_string()))
-        .unwrap_or_default();
-    Some(Track { title, artist })
+    Arc::new(Mutex::new(None))
 }

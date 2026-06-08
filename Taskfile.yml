@@ -1,0 +1,64 @@
+# Taskfile for facecam — https://taskfile.dev
+# Usage:
+#   task            # install deps, then run (first-time setup)
+#   task deps       # install toolchain + system libs + fetch crates
+#   task run        # build & run (release)
+#   task build      # build only (release)
+#   task clean      # remove build artifacts
+version: '3'
+
+tasks:
+  default:
+    desc: Install dependencies and run facecam
+    cmds:
+      - task: deps
+      - task: run
+
+  deps:
+    desc: Install the Rust toolchain, OS system libraries, and crate dependencies
+    cmds:
+      - task: rust
+      - cmd: echo "macOS — audio (CoreAudio) and GUI frameworks are built in; no extra packages needed."
+        platforms: [darwin]
+      - cmd: |
+          set -e
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y \
+              libasound2-dev libudev-dev libgl1-mesa-dev \
+              libxkbcommon-dev libwayland-dev \
+              libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          elif command -v dnf >/dev/null 2>&1; then
+            sudo dnf install -y alsa-lib-devel systemd-devel mesa-libGL-devel \
+              libxkbcommon-devel wayland-devel libxcb-devel
+          elif command -v pacman >/dev/null 2>&1; then
+            sudo pacman -S --needed --noconfirm alsa-lib systemd-libs mesa libxkbcommon wayland libxcb
+          else
+            echo "Unknown package manager — install ALSA, OpenGL, libxkbcommon, wayland and libxcb dev packages manually."
+          fi
+        platforms: [linux]
+      - cargo fetch
+
+  rust:
+    internal: true
+    desc: Install the Rust toolchain via rustup if cargo is missing
+    status:
+      - command -v cargo
+    cmds:
+      - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+      - echo "Rust installed. Run 'source \"$HOME/.cargo/env\"' (or restart your shell) so cargo is on PATH, then re-run."
+
+  build:
+    desc: Build facecam in release mode
+    cmds:
+      - cargo build --release
+
+  run:
+    desc: Build and run facecam in release mode
+    cmds:
+      - cargo run --release
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - cargo clean

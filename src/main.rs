@@ -41,6 +41,7 @@ fn main() -> Result<()> {
 
 fn install_cjk_fallback(ctx: &egui::Context) {
     const CJK_CANDIDATES: &[(&str, u32)] = &[
+        ("/System/Library/Fonts/Hiragino Sans GB.ttc", 0),
         ("/usr/share/fonts/google-noto-sans-mono-cjk-vf-fonts/NotoSansMonoCJK-VF.ttc", 0),
         ("/usr/share/fonts/google-noto-sans-cjk-vf-fonts/NotoSansCJK-VF.ttc", 0),
         ("/usr/share/fonts/google-droid-sans-fonts/DroidSansFallbackFull.ttf", 0),

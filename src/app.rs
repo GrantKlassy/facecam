@@ -1,6 +1,7 @@
 use eframe::egui::{self, Color32, Pos2, Rect};
 use eframe::epaint::Vertex;
 use ringbuf::traits::Consumer;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::audio::{AudioConsumer, AudioControl};
@@ -13,6 +14,12 @@ pub const FFT_SIZE: usize = 4096;
 pub const SAMPLE_RATE: u32 = 44100;
 pub const LOW_HZ: f32 = 30.0;
 pub const HIGH_HZ: f32 = 16_000.0;
+
+// "L7" metric: aggregate the leftmost bars each frame into a rolling history,
+// then derive velocity (1st difference) and acceleration (2nd difference).
+const METRIC_BARS: usize = 7;
+const METRIC_HISTORY: usize = 3;
+const METRIC_SCALE: f32 = 100.0;
 
 #[derive(Clone, Copy)]
 enum Mode {
@@ -52,6 +59,8 @@ pub struct FacecamApp {
     scratch: Vec<f32>,
     show_overlay: bool,
     show_controls: bool,
+    show_debug: bool,
+    metric_history: VecDeque<f32>,
     screenshot_path: Option<std::path::PathBuf>,
     screenshot_counter: AtomicUsize,
     start_time: std::time::Instant,
@@ -80,6 +89,8 @@ impl FacecamApp {
             scratch: vec![0.0; 8192],
             show_overlay: true,
             show_controls: false,
+            show_debug: false,
+            metric_history: VecDeque::with_capacity(METRIC_HISTORY),
             screenshot_path,
             screenshot_counter: AtomicUsize::new(0),
             start_time: std::time::Instant::now(),
@@ -97,6 +108,7 @@ impl FacecamApp {
         let mut device_prev = false;
         let mut toggle_overlay = false;
         let mut toggle_controls = false;
+        let mut toggle_debug = false;
         let mut shoot = false;
         let mut quit = false;
         ctx.input(|i| {
@@ -118,6 +130,9 @@ impl FacecamApp {
             }
             if i.key_pressed(egui::Key::Tab) {
                 toggle_controls = true;
+            }
+            if i.key_pressed(egui::Key::X) {
+                toggle_debug = true;
             }
             if i.key_pressed(egui::Key::S) {
                 shoot = true;
@@ -143,6 +158,9 @@ impl FacecamApp {
         }
         if toggle_controls {
             self.show_controls = !self.show_controls;
+        }
+        if toggle_debug {
+            self.show_debug = !self.show_debug;
         }
         if shoot {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::default()));
@@ -189,6 +207,48 @@ impl FacecamApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
+
+    fn update_metric(&mut self) {
+        let n = METRIC_BARS.min(self.analyzer.bars.len());
+        if n == 0 {
+            return;
+        }
+        let mean = self.analyzer.bars[..n].iter().sum::<f32>() / n as f32 * METRIC_SCALE;
+        if self.metric_history.len() == METRIC_HISTORY {
+            self.metric_history.pop_front();
+        }
+        self.metric_history.push_back(mean);
+    }
+
+    fn metric_stats(&self) -> MetricStats {
+        let h = &self.metric_history;
+        let len = h.len();
+        let value = h.back().copied().unwrap_or(0.0);
+        let velocity = if len >= 2 { h[len - 1] - h[len - 2] } else { 0.0 };
+        let acceleration = if len >= 3 {
+            h[len - 1] - 2.0 * h[len - 2] + h[len - 3]
+        } else {
+            0.0
+        };
+        let ratio = if velocity.abs() > 1e-6 {
+            Some(acceleration / velocity)
+        } else {
+            None
+        };
+        MetricStats {
+            value,
+            velocity,
+            acceleration,
+            ratio,
+        }
+    }
+}
+
+struct MetricStats {
+    value: f32,
+    velocity: f32,
+    acceleration: f32,
+    ratio: Option<f32>,
 }
 
 impl eframe::App for FacecamApp {
@@ -198,6 +258,7 @@ impl eframe::App for FacecamApp {
             self.analyzer.ingest(&self.scratch[..n]);
         }
         self.analyzer.process();
+        self.update_metric();
 
         let track_snapshot = self.nowplaying.lock().unwrap().clone();
         if let (Some(prev), Some(curr)) = (&self.last_track, &track_snapshot) {
@@ -320,6 +381,10 @@ impl eframe::App for FacecamApp {
 
         if self.show_controls {
             draw_controls_panel(&painter, rect);
+        }
+
+        if self.show_debug {
+            draw_debug_panel(&painter, rect, &self.metric_stats());
         }
 
         self.save_pending_screenshots(&ctx);
@@ -490,6 +555,7 @@ fn draw_controls_panel(painter: &egui::Painter, rect: Rect) {
         ("D / Shift+D", "next / prev audio device"),
         ("H", "toggle track overlay"),
         ("Tab", "toggle controls"),
+        ("X", "toggle debug stat (L7 accel/vel)"),
         ("S", "screenshot"),
         ("Q / Esc", "quit"),
     ];
@@ -542,6 +608,59 @@ fn draw_controls_panel(painter: &egui::Painter, rect: Rect) {
             egui::Align2::LEFT_TOP,
             *desc,
             body_font.clone(),
+            Color32::WHITE,
+        );
+    }
+}
+
+fn draw_debug_panel(painter: &egui::Painter, rect: Rect, stats: &MetricStats) {
+    let title_color = Color32::from_rgb(255, 220, 150);
+    let title_font = egui::FontId::proportional(14.0);
+    let body_font = egui::FontId::monospace(13.0);
+    let pad = 10.0;
+    let line_h = 18.0;
+    let title_gap = 8.0;
+
+    let ratio_str = match stats.ratio {
+        Some(r) => format!("{r:+.3}"),
+        None => "n/a".to_string(),
+    };
+    let lines = [
+        format!("accel/vel : {ratio_str}"),
+        format!("velocity  : {:+.4}", stats.velocity),
+        format!("accel     : {:+.4}", stats.acceleration),
+        format!("L7 mean   : {:.4}", stats.value),
+    ];
+
+    let title_galley =
+        painter.layout_no_wrap("debug \u{00b7} L7 accel/vel".to_string(), title_font, title_color);
+    let title_h = title_galley.size().y;
+    let mut max_w = title_galley.size().x;
+    let mut galleys = Vec::with_capacity(lines.len());
+    for line in lines {
+        let g = painter.layout_no_wrap(line, body_font.clone(), Color32::WHITE);
+        max_w = max_w.max(g.size().x);
+        galleys.push(g);
+    }
+
+    let panel_w = max_w + pad * 2.0;
+    let panel_h = pad * 2.0 + title_h + title_gap + line_h * galleys.len() as f32;
+    let panel_rect = Rect::from_min_size(
+        Pos2::new(rect.right() - 6.0 - panel_w, rect.top() + 6.0),
+        egui::vec2(panel_w, panel_h),
+    );
+    painter.rect_filled(panel_rect, 0.0, Color32::from_rgba_premultiplied(0, 0, 0, 220));
+
+    painter.galley(
+        Pos2::new(panel_rect.left() + pad, panel_rect.top() + pad),
+        title_galley,
+        title_color,
+    );
+    let rows_top = panel_rect.top() + pad + title_h + title_gap;
+    for (i, g) in galleys.into_iter().enumerate() {
+        painter.galley(
+            Pos2::new(panel_rect.left() + pad, rows_top + i as f32 * line_h),
+            g,
             Color32::WHITE,
         );
     }

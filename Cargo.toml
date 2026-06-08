@@ -5,18 +5,8 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
+cpal = "0.17.3"
 eframe = "0.34.1"
 png = "0.18.1"
 ringbuf = "0.4.8"
 rustfft = "6.4.1"
-
-# MPRIS (now-playing) is Linux/D-Bus only. The vendored dbus build script
-# rejects non-Linux targets, so keep this dependency off macOS/Windows.
-[target.'cfg(target_os = "linux")'.dependencies]
-mpris = { version = "2.1.0", features = ["dbus-vendored"] }
-
-# On non-Linux we capture audio through CoreAudio/WASAPI via cpal instead of
-# PulseAudio's `parec`. On macOS this reads a virtual loopback input such as
-# BlackHole (set FACECAM_DEVICE=BlackHole, or it follows the default input).
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-cpal = "0.15"

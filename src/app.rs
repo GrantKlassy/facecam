@@ -21,6 +21,11 @@ const METRIC_BARS: usize = 7;
 const METRIC_HISTORY: usize = 3;
 const METRIC_SCALE: f32 = 100.0;
 
+// Rainbow scroll speed (full hue cycles per second), adjustable with Left/Right.
+const RAINBOW_SPEED_DEFAULT: f32 = 1.50;
+const RAINBOW_SPEED_STEP: f32 = 0.25;
+const RAINBOW_SPEED_MIN: f32 = 0.0;
+const RAINBOW_SPEED_MAX: f32 = 10.0;
 #[derive(Clone, Copy)]
 enum Mode {
     Full,
@@ -58,12 +63,14 @@ pub struct FacecamApp {
     mode_idx: usize,
     scratch: Vec<f32>,
     show_overlay: bool,
+    show_hearts: bool,
     show_controls: bool,
     show_debug: bool,
     metric_history: VecDeque<f32>,
     screenshot_path: Option<std::path::PathBuf>,
     screenshot_counter: AtomicUsize,
-    start_time: std::time::Instant,
+    rainbow_speed: f32,
+    rainbow_phase: f32,
     phase_offset: f32,
 }
 
@@ -88,12 +95,14 @@ impl FacecamApp {
             mode_idx,
             scratch: vec![0.0; 8192],
             show_overlay: true,
+            show_hearts: true,
             show_controls: false,
             show_debug: false,
             metric_history: VecDeque::with_capacity(METRIC_HISTORY),
             screenshot_path,
             screenshot_counter: AtomicUsize::new(0),
-            start_time: std::time::Instant::now(),
+            rainbow_speed: RAINBOW_SPEED_DEFAULT,
+            rainbow_phase: 0.0,
             phase_offset: std::env::var("FACECAM_PHASE_OFFSET")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -107,6 +116,9 @@ impl FacecamApp {
         let mut device_next = false;
         let mut device_prev = false;
         let mut toggle_overlay = false;
+        let mut toggle_hearts = false;
+        let mut speed_up = false;
+        let mut speed_down = false;
         let mut toggle_controls = false;
         let mut toggle_debug = false;
         let mut shoot = false;
@@ -125,8 +137,17 @@ impl FacecamApp {
                     device_next = true;
                 }
             }
-            if i.key_pressed(egui::Key::H) {
+            if i.key_pressed(egui::Key::T) {
                 toggle_overlay = true;
+            }
+            if i.key_pressed(egui::Key::H) {
+                toggle_hearts = true;
+            }
+            if i.key_pressed(egui::Key::ArrowRight) {
+                speed_up = true;
+            }
+            if i.key_pressed(egui::Key::ArrowLeft) {
+                speed_down = true;
             }
             if i.key_pressed(egui::Key::Tab) {
                 toggle_controls = true;
@@ -155,6 +176,17 @@ impl FacecamApp {
         }
         if toggle_overlay {
             self.show_overlay = !self.show_overlay;
+        }
+        if toggle_hearts {
+            self.show_hearts = !self.show_hearts;
+        }
+        if speed_up {
+            self.rainbow_speed =
+                (self.rainbow_speed + RAINBOW_SPEED_STEP).min(RAINBOW_SPEED_MAX);
+        }
+        if speed_down {
+            self.rainbow_speed =
+                (self.rainbow_speed - RAINBOW_SPEED_STEP).max(RAINBOW_SPEED_MIN);
         }
         if toggle_controls {
             self.show_controls = !self.show_controls;
@@ -275,6 +307,11 @@ impl eframe::App for FacecamApp {
         let ctx = ui.ctx().clone();
         self.handle_input(&ctx);
 
+        // Advance the rainbow phase by elapsed time so adjusting the speed
+        // with Left/Right never causes a jump in the scroll position.
+        let dt = ctx.input(|i| i.stable_dt);
+        self.rainbow_phase += dt * self.rainbow_speed;
+
         let palette = song_palette_override(track_snapshot.as_ref())
             .unwrap_or(&PALETTES[self.palette_idx]);
 
@@ -314,22 +351,23 @@ impl eframe::App for FacecamApp {
             }
             Mode::Rainbow => {
                 let max_h = rect.height() * 0.97;
-                let phase = self.start_time.elapsed().as_secs_f32() * 1.50
-                    + self.phase_offset;
+                let phase = self.rainbow_phase + self.phase_offset;
                 draw_rainbow_bars(&painter, rect, &self.analyzer.bars,
                                   max_h, bar_w, gap, phase);
             }
         }
 
-        let face_text = "\u{2764}\u{2764}\u{2764}";
-        let face_size = (rect.height() * 0.45).min(rect.width() / 6.0);
-        painter.text(
-            Pos2::new(rect.center().x, rect.top() + face_size * 0.05),
-            egui::Align2::CENTER_TOP,
-            face_text,
-            egui::FontId::monospace(face_size),
-            Color32::from_rgb(0xff, 0x33, 0x55),
-        );
+        if self.show_hearts {
+            let face_text = "\u{2764}\u{2764}\u{2764}";
+            let face_size = (rect.height() * 0.45).min(rect.width() / 6.0);
+            painter.text(
+                Pos2::new(rect.center().x, rect.top() + face_size * 0.05),
+                egui::Align2::CENTER_TOP,
+                face_text,
+                egui::FontId::monospace(face_size),
+                Color32::from_rgb(0xff, 0x33, 0x55),
+            );
+        }
 
         if self.show_overlay {
             let track = {
@@ -339,7 +377,7 @@ impl eframe::App for FacecamApp {
                     .unwrap_or_else(|| String::from("(no track)"))
             };
             let palette_label = if matches!(mode, Mode::Rainbow) {
-                format!("[{}]", mode.name())
+                format!("[{} | {:.2}x]", mode.name(), self.rainbow_speed)
             } else {
                 format!("[{} | {}]", mode.name(), palette.name)
             };
@@ -553,7 +591,9 @@ fn draw_controls_panel(painter: &egui::Painter, rect: Rect) {
         ("Space", "cycle palette"),
         ("M", "cycle mode"),
         ("D / Shift+D", "next / prev audio device"),
-        ("H", "toggle track overlay"),
+        ("T", "toggle track overlay"),
+        ("H", "toggle hearts"),
+        ("\u{2190} / \u{2192}", "rainbow scroll speed"),
         ("Tab", "toggle controls"),
         ("X", "toggle debug stat (L7 accel/vel)"),
         ("S", "screenshot"),
